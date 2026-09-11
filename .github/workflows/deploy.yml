@@ -9,6 +9,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+concurrency:
+  group: d1-events-production
+  cancel-in-progress: false
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
@@ -50,92 +54,45 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Configure pinned Production SSH host
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$SSH_PRIVATE_KEY"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/d1events-deploy"
+          chmod 600 "$HOME/.ssh/d1events-deploy"
 
-      - name: Copy config files to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: 89.104.94.114
-          username: root
-          key: ${{ secrets.SSH_KEY }}
-          port: 22
-          source: "deploy/docker-compose.shared-prod.yml,deploy/nginx.shared-prod.conf"
-          target: /opt/d1-events/incoming
-          overwrite: true
+          ssh-keyscan -t ed25519 89.104.94.114 2>/dev/null \
+            > "$HOME/.ssh/known_hosts.pending"
+          fingerprint=$(ssh-keygen -lf "$HOME/.ssh/known_hosts.pending" -E sha256 \
+            | awk '{print $2}')
+          test "$fingerprint" = "SHA256:jZJ1TKQjfzdF0morgmYTyqUcZX6Fy96vJXOfuZVwC2Y"
+          mv "$HOME/.ssh/known_hosts.pending" "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
 
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: 89.104.94.114
-          username: root
-          key: ${{ secrets.SSH_KEY }}
-          port: 22
-          command_timeout: 20m
-          script: |
-            set -euo pipefail
-            export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-            cd /opt/d1-events
+      - name: Run constrained Production deployment
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GHCR_TOKEN"
+          {
+            printf '%s\n' "$GITHUB_ACTOR"
+            printf '%s\n' "$GHCR_TOKEN"
+          } | ssh \
+            -i "$HOME/.ssh/d1events-deploy" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -T d1events-deploy@89.104.94.114
 
-            install -m 600 \
-              incoming/deploy/docker-compose.shared-prod.yml \
-              docker-compose.yml
-
-            # Certbot modifies this file after direct DNS cutover. Preserve the
-            # managed TLS directives on subsequent application deploys.
-            if [ ! -f /etc/nginx/sites-available/d1-events.conf ]; then
-              install -m 644 \
-                incoming/deploy/nginx.shared-prod.conf \
-                /etc/nginx/sites-available/d1-events.conf
-              ln -sfn \
-                /etc/nginx/sites-available/d1-events.conf \
-                /etc/nginx/sites-enabled/d1-events.conf
-            fi
-
-            test -s .env
-            test -s /etc/nginx/sites-available/d1-events.conf
-            docker volume inspect d1events_uploads >/dev/null
-
-            image_repo=$(printf '%s' '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
-            export IMAGE=${{ env.REGISTRY }}/$image_repo:latest
-            compose="docker compose -p d1events --env-file .env -f docker-compose.yml"
-
-            export DOCKER_CONFIG=/opt/d1-events/.docker-gha
-            install -d -m 700 "$DOCKER_CONFIG"
-
-            cleanup_registry_auth() {
-              rm -f "$DOCKER_CONFIG/config.json"
-              rmdir "$DOCKER_CONFIG" 2>/dev/null || true
-            }
-            trap cleanup_registry_auth EXIT
-
-            echo "${{ secrets.GITHUB_TOKEN }}" \
-              | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-            $compose pull app
-            $compose up -d db
-
-            docker run --rm \
-              --network d1events_default \
-              --env-file .env \
-              --user 0 \
-              --entrypoint sh \
-              "$IMAGE" \
-              -c "set -e; cd /app; NODE_PATH=/usr/local/lib/node_modules prisma db push --schema=prisma/schema.prisma"
-
-            $compose up -d app
-            nginx -t
-            systemctl reload nginx
-
-            for attempt in $(seq 1 30); do
-              code=$(curl -sS -o /dev/null -w '%{http_code}' \
-                --max-time 5 \
-                -H 'Host: tma.d1capital.ru' \
-                http://127.0.0.1/ || true)
-              [ "$code" = 200 ] && break
-              sleep 2
-            done
-
-            test "$code" = 200
-            $compose ps
+      - name: Remove runner SSH material
+        if: always()
+        run: rm -f "$HOME/.ssh/d1events-deploy" "$HOME/.ssh/known_hosts"

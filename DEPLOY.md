@@ -8,11 +8,11 @@
 - App listener: `127.0.0.1:3100`
 - Persistent volumes: `d1events_pgdata`, `d1events_uploads`
 - Public hostname: `tma.d1capital.ru`
-- Temporary TLS/DNS gateway: `5.42.103.212`
+- TLS terminates directly on `89.104.94.114` with automatic Certbot renewal
+- Rollback host: `5.42.103.212`
 
-Until the REG.RU A record is switched, the old host terminates TLS and proxies
-requests to the Production host. The old `club-app-1` and `club-db-1` remain
-running as a rollback copy.
+The old `club-app-1` and `club-db-1` remain running as a rollback copy. They are
+not in the public request path after the REG.RU A record switched to Production.
 
 ## Health checks
 
@@ -28,36 +28,24 @@ curl -fsS -o /dev/null -w '%{http_code}\n' https://tma.d1capital.ru/
 Expected result: both containers are running, PostgreSQL is healthy, nginx is
 active, and the public request returns `200`.
 
-## Finish direct DNS cutover
+## Verify direct DNS and TLS
 
-1. In REG.RU, change only the `A` record for `tma.d1capital.ru` from
-   `5.42.103.212` to `89.104.94.114`.
-2. Confirm the authoritative answer:
+Confirm the authoritative answer:
 
 ```bash
 dig @ns1.reg.ru +short tma.d1capital.ru A
 ```
 
-3. Issue the certificate on the Production host after the authoritative record
-   returns `89.104.94.114`:
+Expected result: `89.104.94.114`.
+
+Check the installed certificate and renewal timer:
 
 ```bash
-ssh root@89.104.94.114 '
-  set -e
-  email=$(grep -m1 "^EMAIL=" /opt/d1-events/.env | cut -d= -f2-)
-  certbot --nginx \
-    --non-interactive \
-    --agree-tos \
-    --redirect \
-    --email "$email" \
-    -d tma.d1capital.ru
-  nginx -t
-  systemctl reload nginx
-'
+ssh root@89.104.94.114 \
+  'certbot certificates -d tma.d1capital.ru && systemctl status certbot.timer'
 ```
 
-4. Verify that the certificate is served by `89.104.94.114`, then keep the old
-   host unchanged for a rollback window.
+Keep the old host unchanged for the agreed rollback window.
 
 ## Temporary rollback
 
@@ -79,8 +67,15 @@ ssh root@5.42.103.212 '
 '
 ```
 
-## CI/CD warning
+## CI/CD access model
 
-The existing GitHub Actions SSH credential is authorized only on the old host.
-Do not run the old deploy workflow until its target and credential are migrated
-to `89.104.94.114`; otherwise it can deploy back to the temporary gateway.
+GitHub Actions connects as `d1events-deploy`. Its authorized key is constrained
+to `/usr/bin/sudo -n /usr/local/sbin/deploy-d1-events`; it cannot request an
+interactive shell, forward ports, or upload arbitrary files. The root-owned
+script accepts only the temporary GHCR username/token on stdin and deploys the
+fixed `ghcr.io/d1capital/d1-events:latest` image from `/opt/d1-events`.
+
+Each deployment creates a PostgreSQL custom-format backup in
+`/opt/d1-events/backups/automatic`, validates Compose, applies the Prisma schema,
+checks the local app and public HTTPS endpoint, and restores the previous app
+image if the application health check fails.
