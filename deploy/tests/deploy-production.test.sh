@@ -9,6 +9,9 @@ workflow="$repo_root/.github/workflows/deploy.yml"
 test -f "$deploy_script"
 bash -n "$deploy_script"
 
+"$deploy_script" --validate-registry-user D1Capital
+"$deploy_script" --validate-registry-user 'dependabot[bot]'
+
 grep -Fq 'readonly APP_DIR="/opt/d1-events"' "$deploy_script"
 grep -Fq 'readonly IMAGE="ghcr.io/d1capital/d1-events:latest"' "$deploy_script"
 grep -Fq 'flock -n 9' "$deploy_script"

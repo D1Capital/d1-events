@@ -7,6 +7,15 @@ readonly APP_DIR="/opt/d1-events"
 readonly IMAGE="ghcr.io/d1capital/d1-events:latest"
 readonly BACKUP_DIR="$APP_DIR/backups/automatic"
 
+valid_registry_user() {
+  [ -n "${1:-}" ] && [ "${#1}" -le 256 ]
+}
+
+if [ "${1:-}" = "--validate-registry-user" ]; then
+  valid_registry_user "${2:-}"
+  exit $?
+fi
+
 if [ "$(id -u)" -ne 0 ]; then
   echo "deploy-production must run as root" >&2
   exit 1
@@ -15,7 +24,7 @@ fi
 IFS= read -r registry_user
 IFS= read -r registry_token
 
-if [[ ! "$registry_user" =~ ^[A-Za-z0-9_.@+][A-Za-z0-9_.@+\[\]-]{0,127}$ ]]; then
+if ! valid_registry_user "$registry_user"; then
   echo "Invalid registry username" >&2
   exit 1
 fi
