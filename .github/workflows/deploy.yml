@@ -57,187 +57,85 @@ jobs:
       - name: Copy config files to server
         uses: appleboy/scp-action@v0.1.7
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
+          host: 89.104.94.114
+          username: root
           key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
-          source: "deploy/docker-compose.yml,deploy/nginx.conf,scripts/deploy/init-letsencrypt.sh,prisma/schema.prisma,prisma.config.ts"
-          target: ~/club
+          port: 22
+          source: "deploy/docker-compose.shared-prod.yml,deploy/nginx.shared-prod.conf"
+          target: /opt/d1-events/incoming
           overwrite: true
 
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
+          host: 89.104.94.114
+          username: root
           key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT || 22 }}
+          port: 22
           command_timeout: 20m
           script: |
             set -euo pipefail
+            export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+            cd /opt/d1-events
 
-            cd ~/club
-            mkdir -p deploy scripts/deploy src/db
-            export PATH="/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin:$PATH"
+            install -m 600 \
+              incoming/deploy/docker-compose.shared-prod.yml \
+              docker-compose.yml
 
-            EXISTING_WEBHOOK_SECRET=""
-            EXISTING_APP_URL=""
-            EXISTING_PHOTOS_PASSWORD=""
-            if [ -f .env ]; then
-              EXISTING_WEBHOOK_SECRET=$(grep '^TELEGRAM_WEBHOOK_SECRET=' .env | cut -d= -f2- || true)
-              EXISTING_APP_URL=$(grep '^APP_URL=' .env | cut -d= -f2- || true)
-              EXISTING_PHOTOS_PASSWORD=$(grep '^PHOTOS_ADMIN_PASSWORD=' .env | cut -d= -f2- || true)
+            # Certbot modifies this file after direct DNS cutover. Preserve the
+            # managed TLS directives on subsequent application deploys.
+            if [ ! -f /etc/nginx/sites-available/d1-events.conf ]; then
+              install -m 644 \
+                incoming/deploy/nginx.shared-prod.conf \
+                /etc/nginx/sites-available/d1-events.conf
+              ln -sfn \
+                /etc/nginx/sites-available/d1-events.conf \
+                /etc/nginx/sites-enabled/d1-events.conf
             fi
 
-            if [ -n "${{ secrets.PHOTOS_ADMIN_PASSWORD }}" ]; then
-              PHOTOS_ADMIN_PASSWORD_VALUE="${{ secrets.PHOTOS_ADMIN_PASSWORD }}"
-            else
-              PHOTOS_ADMIN_PASSWORD_VALUE="$EXISTING_PHOTOS_PASSWORD"
-            fi
+            test -s .env
+            test -s /etc/nginx/sites-available/d1-events.conf
+            docker volume inspect d1events_uploads >/dev/null
 
-            if [ -n "${{ secrets.TELEGRAM_WEBHOOK_SECRET }}" ]; then
-              TELEGRAM_WEBHOOK_SECRET_VALUE="${{ secrets.TELEGRAM_WEBHOOK_SECRET }}"
-            elif [ -n "$EXISTING_WEBHOOK_SECRET" ]; then
-              TELEGRAM_WEBHOOK_SECRET_VALUE="$EXISTING_WEBHOOK_SECRET"
-            else
-              TELEGRAM_WEBHOOK_SECRET_VALUE=$(openssl rand -hex 32)
-            fi
+            image_repo=$(printf '%s' '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
+            export IMAGE=${{ env.REGISTRY }}/$image_repo:latest
+            compose="docker compose -p d1events --env-file .env -f docker-compose.yml"
 
-            if [ -n "${{ secrets.APP_URL }}" ]; then
-              APP_URL_VALUE="${{ secrets.APP_URL }}"
-            elif [ -n "$EXISTING_APP_URL" ]; then
-              APP_URL_VALUE="$EXISTING_APP_URL"
-            elif [ -n "${{ secrets.DOMAIN }}" ]; then
-              APP_URL_VALUE="https://${{ secrets.DOMAIN }}"
-            else
-              APP_URL_VALUE=""
-            fi
+            export DOCKER_CONFIG=/opt/d1-events/.docker-gha
+            install -d -m 700 "$DOCKER_CONFIG"
 
-            resolve_docker() {
-              if command -v docker >/dev/null 2>&1; then
-                echo "docker"
-                return
-              fi
-
-              for candidate in /usr/bin/docker /usr/local/bin/docker /snap/bin/docker; do
-                if [ -x "$candidate" ]; then
-                  echo "$candidate"
-                  return
-                fi
-              done
-
-              if command -v sudo >/dev/null 2>&1; then
-                for candidate in /usr/bin/docker /usr/local/bin/docker /snap/bin/docker; do
-                  if sudo test -x "$candidate" 2>/dev/null; then
-                    echo "sudo $candidate"
-                    return
-                  fi
-                done
-              fi
-
-              echo "Docker не найден на сервере. Сначала выполните scripts/deploy/setup-server.sh или установите Docker вручную." >&2
-              exit 127
+            cleanup_registry_auth() {
+              rm -f "$DOCKER_CONFIG/config.json"
+              rmdir "$DOCKER_CONFIG" 2>/dev/null || true
             }
+            trap cleanup_registry_auth EXIT
 
-            DOCKER="$(resolve_docker)"
-            if [ -z "$DOCKER" ]; then
-              echo "Docker не найден на сервере. Сначала выполните scripts/deploy/setup-server.sh или установите Docker вручную." >&2
-              exit 127
-            fi
+            echo "${{ secrets.GITHUB_TOKEN }}" \
+              | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-            # Write runtime environment file from GitHub secrets
-            cat > .env <<EOF
-            POSTGRES_USER=${{ secrets.POSTGRES_USER || 'club' }}
-            POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
-            POSTGRES_DB=${{ secrets.POSTGRES_DB || 'club' }}
-            DATABASE_URL=postgresql://${{ secrets.POSTGRES_USER || 'club' }}:${{ secrets.POSTGRES_PASSWORD }}@db:5432/${{ secrets.POSTGRES_DB || 'club' }}
-            BOT_TOKEN=${{ secrets.BOT_TOKEN }}
-            TELEGRAM_WEBHOOK_SECRET=$TELEGRAM_WEBHOOK_SECRET_VALUE
-            TELEGRAM_API_BASE=${{ secrets.TELEGRAM_API_BASE }}
-            APP_URL=$APP_URL_VALUE
-            DOMAIN=${{ secrets.DOMAIN }}
-            EMAIL=${{ secrets.EMAIL }}
-            NEXT_SERVER_ACTIONS_ENCRYPTION_KEY=${{ secrets.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY }}
-            PHOTOS_ADMIN_PASSWORD=$PHOTOS_ADMIN_PASSWORD_VALUE
-            EOF
+            $compose pull app
+            $compose up -d db
 
-            if [ -z "${{ secrets.POSTGRES_PASSWORD }}" ] || [ -z "${{ secrets.BOT_TOKEN }}" ]; then
-              echo "POSTGRES_PASSWORD и BOT_TOKEN должны быть заданы в GitHub Secrets." >&2
-              exit 1
-            fi
-
-            COMPOSE="$DOCKER compose -p club --env-file .env -f deploy/docker-compose.yml"
-
-            # Login to GHCR
-            echo "${{ secrets.GITHUB_TOKEN }}" | $DOCKER login ghcr.io -u ${{ github.actor }} --password-stdin
-
-            # Set image tag
-            IMAGE_REPO=$(printf '%s' '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')
-            export IMAGE=${{ env.REGISTRY }}/$IMAGE_REPO:latest
-
-            # Substitute domain in nginx.conf
-            DOMAIN="${{ secrets.DOMAIN }}"
-            EMAIL="${{ secrets.EMAIL }}"
-            if [ -n "$DOMAIN" ]; then
-              sed -i "s/DOMAIN/$DOMAIN/g" deploy/nginx.conf
-              sed -i "s/server_name _;/server_name $DOMAIN;/g" deploy/nginx.conf
-            fi
-
-            # Pull new image and restart
-            $COMPOSE pull app
-            $COMPOSE up -d
-
-            # Run migrations прямо из собранного образа (prisma запечена внутрь).
-            # Никакого npm install на сервере — РФ-сеть не достаёт до npmjs.org.
-            $DOCKER run --rm \
-              --network club_default \
+            docker run --rm \
+              --network d1events_default \
               --env-file .env \
               --user 0 \
               --entrypoint sh \
               "$IMAGE" \
-              -c "set -e; cd /app; echo 'Модели в схеме (из образа):'; grep -E '^[[:space:]]*model ' prisma/schema.prisma; NODE_PATH=/usr/local/lib/node_modules prisma db push --schema=prisma/schema.prisma"
+              -c "set -e; cd /app; NODE_PATH=/usr/local/lib/node_modules prisma db push --schema=prisma/schema.prisma"
 
-            # Configure Telegram webhook automatically.
-            # На проде в РФ Telegram не может доставлять вебхук напрямую на сервер
-            # (подсети Telegram заблокированы), поэтому вебхук ставим на Cloudflare
-            # Worker-прокси (secrets.TELEGRAM_WEBHOOK_URL). Worker форвардит апдейты
-            # на /api/telegram/webhook. Если секрет не задан — старое поведение.
-            if [ -n "${{ secrets.TELEGRAM_WEBHOOK_URL }}" ]; then
-              WEBHOOK_URL="${{ secrets.TELEGRAM_WEBHOOK_URL }}"
-            elif [ -n "$APP_URL_VALUE" ]; then
-              WEBHOOK_URL="${APP_URL_VALUE%/}/api/telegram/webhook"
-            elif [ -n "$DOMAIN" ]; then
-              WEBHOOK_URL="https://$DOMAIN/api/telegram/webhook"
-            else
-              WEBHOOK_URL=""
-            fi
+            $compose up -d app
+            nginx -t
+            systemctl reload nginx
 
-            # setWebhook вызываем через TELEGRAM_API_BASE (тот же прокси), т.к. прямой
-            # доступ к api.telegram.org с сервера тоже может быть заблокирован.
-            TG_API="${{ secrets.TELEGRAM_API_BASE }}"
-            TG_API="${TG_API:-https://api.telegram.org}"
-            if [ -n "$WEBHOOK_URL" ] && [ -n "$TELEGRAM_WEBHOOK_SECRET_VALUE" ]; then
-              curl -fsS -X POST "$TG_API/bot${{ secrets.BOT_TOKEN }}/setWebhook" \
-                -H "Content-Type: application/json" \
-                -d "{\"url\":\"$WEBHOOK_URL\",\"secret_token\":\"$TELEGRAM_WEBHOOK_SECRET_VALUE\",\"allowed_updates\":[\"message\",\"callback_query\"]}"
-            else
-              echo "Skip Telegram webhook setup: webhook URL is not configured."
-            fi
+            for attempt in $(seq 1 30); do
+              code=$(curl -sS -o /dev/null -w '%{http_code}' \
+                --max-time 5 \
+                -H 'Host: tma.d1capital.ru' \
+                http://127.0.0.1/ || true)
+              [ "$code" = 200 ] && break
+              sleep 2
+            done
 
-            # Init SSL only on first provisioning (cert missing). Сертификат продлевает
-            # постоянный сервис certbot, поэтому здесь шаг не должен ронять деплой —
-            # любые сбои (сеть до Let's Encrypt и т.п.) не критичны для уже выданного
-            # сертификата. Выполняется ПОСЛЕ миграций и вебхука, чтобы их не блокировать.
-            if [ -n "$DOMAIN" ] && [ -n "$EMAIL" ]; then
-              if $COMPOSE run --rm --no-deps --entrypoint sh certbot -c "test -f /etc/letsencrypt/live/$DOMAIN/fullchain.pem"; then
-                echo "SSL certificate already present — skipping init."
-              else
-                echo "SSL certificate missing — attempting init (non-fatal)."
-                chmod +x scripts/deploy/init-letsencrypt.sh
-                bash scripts/deploy/init-letsencrypt.sh "$DOMAIN" "$EMAIL" \
-                  || echo "WARNING: SSL init failed; continuing (existing cert, if any, still served)."
-              fi
-            fi
-
-            # Cleanup old images
-            $DOCKER image prune -f
+            test "$code" = 200
+            $compose ps

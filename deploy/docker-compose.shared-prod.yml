@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-club}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-club}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-club} -d ${POSTGRES_DB:-club}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    image: ${IMAGE:-ghcr.io/d1capital/d1-events:latest}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3100:3000"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-club}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-club}
+      BOT_TOKEN: ${BOT_TOKEN}
+      TELEGRAM_WEBHOOK_SECRET: ${TELEGRAM_WEBHOOK_SECRET}
+      TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-https://api.telegram.org}
+      APP_URL: ${APP_URL}
+      DOMAIN: ${DOMAIN}
+      NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY}
+      PHOTOS_ADMIN_PASSWORD: ${PHOTOS_ADMIN_PASSWORD}
+      NODE_ENV: production
+    volumes:
+      - uploads:/app/public/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  uploads:
+    external: true
+    name: d1events_uploads
