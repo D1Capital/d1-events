@@ -24,20 +24,6 @@ export default function HomePage() {
   const { dbUser, isLoading, authHeaders } = useTelegram();
   const [events, setEvents] = useState<EventPreview[]>([]);
   const [loadingData, setLoadingData] = useState(true);
-  const [eventPhotos, setEventPhotos] = useState<string[]>([]);
-
-  useEffect(() => {
-    fetch("/api/site-images")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (!data?.images) return;
-        const urls = data.images
-          .map((img: { url: string | null }) => img.url)
-          .filter((u: string | null): u is string => Boolean(u));
-        setEventPhotos(urls);
-      })
-      .catch(() => {});
-  }, []);
 
   useEffect(() => {
     if (isLoading) return;
@@ -128,17 +114,14 @@ export default function HomePage() {
           </p>
           <p className="text-[11px] text-muted-foreground lg:text-xs">клуба</p>
         </div>
-        <div className="ml-auto flex items-center gap-2 py-2 pr-2">
-          {eventPhotos.map((src, i) => (
-            <div
-              key={src}
-              className={`relative h-32 w-16 overflow-hidden rounded-xl${
-                i === 2 ? " hidden min-[385px]:block" : ""
-              }`}
-            >
-              <Image src={src} alt="" fill unoptimized className="object-cover" />
-            </div>
-          ))}
+        <div className="ml-auto py-2 pr-2">
+          <Image
+            src="/personal-strategy-club.jpg"
+            alt="Второй поток тренинга по личной стратегии"
+            width={86}
+            height={128}
+            className="h-32 w-[86px] rounded-xl object-cover"
+          />
         </div>
       </Link>
 
@@ -245,7 +228,12 @@ export default function HomePage() {
             {events.map((event, index) => (
               <EventCard
                 key={event.id}
-                event={event}
+                event={
+                  event.title.toLowerCase() === "тренинг по личной стратегии" &&
+                  event.date === "2026-09-26"
+                    ? { ...event, coverUrl: "/personal-strategy-event.jpg" }
+                    : event
+                }
                 linkClassName="flex"
                 className={`animate-slide-up stagger-${Math.min(index + 6, 10)}`}
               />
