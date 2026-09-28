@@ -3,10 +3,9 @@
 import {
   CalendarDays,
   ChevronRight,
-  ExternalLink,
   Gift,
-  MessageSquarePlus,
   MessagesSquare,
+  Pencil,
   Plus,
   Users,
 } from "lucide-react";
@@ -21,9 +20,41 @@ import { useTelegram } from "@/integrations/telegram";
 
 /** Главная страница: приветствие, статистика, ближайшие мероприятия. */
 export default function HomePage() {
-  const { dbUser, isLoading, authHeaders } = useTelegram();
+  const { dbUser, isAdmin, isLoading, authHeaders } = useTelegram();
   const [events, setEvents] = useState<EventPreview[]>([]);
   const [loadingData, setLoadingData] = useState(true);
+  const [clubImages, setClubImages] = useState<(string | null)[]>([
+    null,
+    null,
+    null,
+  ]);
+
+  useEffect(() => {
+    async function loadClubImages() {
+      try {
+        const response = await fetch("/api/site-images", { cache: "no-store" });
+        if (!response.ok) throw new Error("Failed to load club images");
+        const data = await response.json();
+        setClubImages(
+          [1, 2, 3].map(
+            (slot) =>
+              data.images.find(
+                (image: { slot: number; url: string | null }) =>
+                  image.slot === slot,
+              )?.url ?? null,
+          ),
+        );
+      } catch (error) {
+        console.error("Club images fetch error:", error);
+        setClubImages([
+          "/dvoryane-krestyane-gorozhane.jpg",
+          "/kava_no_ringu.png",
+          "/portfolio_rebalance.png",
+        ]);
+      }
+    }
+    loadClubImages();
+  }, []);
 
   useEffect(() => {
     if (isLoading) return;
@@ -104,26 +135,48 @@ export default function HomePage() {
         </div>
       </Link>
 
-      <Link
-        href="/events"
-        className="animate-fade-in relative flex h-36 overflow-hidden rounded-2xl bg-card shadow-[0_2px_8px_0_rgb(0_0_0/0.08),inset_0_1px_0_0_rgb(255_255_255/0.35),inset_0_0_0_1px_rgb(255_255_255/0.08)]"
-      >
-        <div className="flex flex-col justify-end p-3 lg:p-4">
-          <p className="text-base font-bold tracking-tight lg:text-xl">
-            Мероприятия
-          </p>
-          <p className="text-[11px] text-muted-foreground lg:text-xs">клуба</p>
-        </div>
-        <div className="ml-auto py-2 pr-2">
-          <Image
-            src="/dvoryane-krestyane-gorozhane.jpg"
-            alt="Лекция «Дворяне, крестьяне, горожане»"
-            width={86}
-            height={128}
-            className="h-32 w-[86px] rounded-xl object-contain"
-          />
-        </div>
-      </Link>
+      <div className="animate-fade-in">
+        <Link
+          href="/events"
+          className="relative flex h-36 overflow-hidden rounded-2xl bg-card shadow-[0_2px_8px_0_rgb(0_0_0/0.08),inset_0_1px_0_rgb(255_255_255/0.35),inset_0_0_0_1px_rgb(255_255_255/0.08)]"
+        >
+          <div className="flex min-w-0 flex-1 flex-col justify-end p-3 lg:p-4">
+            <p className="text-base font-bold tracking-tight lg:text-xl">
+              Мероприятия
+            </p>
+            <p className="text-[11px] text-muted-foreground lg:text-xs">
+              клуба
+            </p>
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-1 py-2 pr-2 sm:gap-1.5">
+            {clubImages.map((url, index) => (
+              <div
+                key={index}
+                className="relative h-28 w-[54px] overflow-hidden rounded-lg bg-muted sm:h-32 sm:w-[72px]"
+              >
+                {url && (
+                  <Image
+                    src={url}
+                    alt={`Афиша мероприятия ${index + 1}`}
+                    fill
+                    sizes="(max-width: 640px) 54px, 72px"
+                    className="object-contain"
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        </Link>
+        {isAdmin && (
+          <Link
+            href="/edit-club-photos"
+            className="mt-2 flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border bg-card px-4 text-sm font-medium transition-colors hover:bg-muted"
+          >
+            <Pencil className="h-4 w-4" />
+            Редактировать
+          </Link>
+        )}
+      </div>
 
       <section className="animate-slide-up stagger-5 grid grid-cols-2 gap-3">
         <Link href="/chats" className="flex">
