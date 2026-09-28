@@ -116,11 +116,11 @@ export default function HomePage() {
         </div>
         <div className="ml-auto py-2 pr-2">
           <Image
-            src="/personal-strategy-club.jpg"
-            alt="Второй поток тренинга по личной стратегии"
+            src="/dvoryane-krestyane-gorozhane.jpg"
+            alt="Лекция «Дворяне, крестьяне, горожане»"
             width={86}
             height={128}
-            className="h-32 w-[86px] rounded-xl object-cover"
+            className="h-32 w-[86px] rounded-xl object-contain"
           />
         </div>
       </Link>

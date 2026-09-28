@@ -6,6 +6,23 @@ import type {
 import type { Event } from "@/db/schema";
 import type { EventDetailDto, EventListItem } from "@/server/queries/events";
 
+function eventCoverUrl(event: {
+  title: string;
+  date: string;
+  coverUrl: string | null;
+}) {
+  const title = event.title.toLocaleLowerCase("ru-RU");
+  if (
+    event.date === "2026-10-06" &&
+    title.includes("дворяне") &&
+    title.includes("крестьяне") &&
+    title.includes("горожане")
+  ) {
+    return "/dvoryane-krestyane-gorozhane-event.jpg";
+  }
+  return event.coverUrl;
+}
+
 export function serializeEventListItem(
   event: EventListItem,
 ): EventListItemResponse {
@@ -16,7 +33,7 @@ export function serializeEventListItem(
     date: event.date,
     time: event.time,
     location: event.location,
-    coverUrl: event.coverUrl,
+    coverUrl: eventCoverUrl(event),
     maxParticipants: event.maxParticipants,
     status: event.status,
     createdBy: event.createdBy,
@@ -51,7 +68,7 @@ export function serializeEventDetail(
     date: event.date,
     time: event.time,
     location: event.location,
-    coverUrl: event.coverUrl,
+    coverUrl: eventCoverUrl(event),
     maxParticipants: event.maxParticipants,
     status: event.status,
     createdBy: event.createdBy,
