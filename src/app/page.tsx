@@ -148,24 +148,26 @@ export default function HomePage() {
               клуба
             </p>
           </div>
-          <div className="ml-auto flex shrink-0 items-center gap-1 py-2 pr-2 sm:gap-1.5">
-            {clubImages.map((url, index) => (
-              <div
-                key={index}
-                className="relative h-28 w-[54px] overflow-hidden rounded-lg bg-muted sm:h-32 sm:w-[72px]"
-              >
-                {url && (
-                  <Image
-                    src={url}
-                    alt={`Афиша мероприятия ${index + 1}`}
-                    fill
-                    sizes="(max-width: 640px) 54px, 72px"
-                    className="object-contain"
-                  />
-                )}
-              </div>
-            ))}
-          </div>
+          {clubImages.some(Boolean) && (
+            <div className="ml-auto flex shrink-0 items-center gap-1 py-2 pr-2 sm:gap-1.5">
+              {clubImages.map((url, index) =>
+                url ? (
+                  <div
+                    key={index}
+                    className="relative h-28 w-[54px] overflow-hidden rounded-lg sm:h-32 sm:w-[72px]"
+                  >
+                    <Image
+                      src={url}
+                      alt={`Афиша мероприятия ${index + 1}`}
+                      fill
+                      sizes="(max-width: 640px) 54px, 72px"
+                      className="object-cover"
+                    />
+                  </div>
+                ) : null,
+              )}
+            </div>
+          )}
         </Link>
         {isAdmin && (
           <Link
